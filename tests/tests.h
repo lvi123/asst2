@@ -1177,7 +1177,7 @@ TestResults spinBetweenRunCallsAsyncTest(ITaskSystem *t) {
  * which means thread pool and spawning threads each run() should have
  * similar performance.
  */
-TestResults mandelbrotChunkedTestBase(ITaskSystem* t, bool do_async) {
+TestResults -mandelbrotChunkedTestBase(ITaskSystem* t, bool do_async) {
 
     int num_tasks = 128;
     

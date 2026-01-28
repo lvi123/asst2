@@ -1,9 +1,11 @@
 #include "tasksys.h"
 
+#include <algorithm>
+#include <thread>
 
 IRunnable::~IRunnable() {}
 
-ITaskSystem::ITaskSystem(int num_threads) {}
+ITaskSystem::ITaskSystem(int num_threads): num_threads(num_threads) {}
 ITaskSystem::~ITaskSystem() {}
 
 /*
@@ -61,15 +63,22 @@ TaskSystemParallelSpawn::~TaskSystemParallelSpawn() {}
 
 void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
 
+    // printf("Running %d tasks in parallel\n", num_total_tasks);
+    // printf("Using %d threads\n", num_threads);
 
-    //
-    // TODO: CS149 students will modify the implementation of this
-    // method in Part A.  The implementation provided below runs all
-    // tasks sequentially on the calling thread.
-    //
-
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
+    int num_tasks_per_thread = (num_total_tasks + num_threads - 1) / num_threads;
+    std::vector<std::thread> threads;
+    for (int i = 0; i < num_threads; i++) {
+        threads.push_back(std::thread([runnable, i, num_tasks_per_thread, num_total_tasks]() {
+            int start_task = i * num_tasks_per_thread;
+            int end_task = std::min(start_task + num_tasks_per_thread, num_total_tasks);
+            for (int j = start_task; j < end_task; j++) {
+                runnable->runTask(j, num_total_tasks);
+            }
+        }));
+    }
+    for (auto& thread : threads) {
+        thread.join();
     }
 }
 
