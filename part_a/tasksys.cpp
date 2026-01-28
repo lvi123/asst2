@@ -103,28 +103,60 @@ const char* TaskSystemParallelThreadPoolSpinning::name() {
     return "Parallel + Thread Pool + Spin";
 }
 
-TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int num_threads): ITaskSystem(num_threads) {
-    //
-    // TODO: CS149 student implementations may decide to perform setup
-    // operations (such as thread pool construction) here.
-    // Implementations are free to add new class member variables
-    // (requiring changes to tasksys.h).
-    //
+TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int num_threads):ITaskSystem(num_threads), 
+ num_total_tasks(0), task_id_counter(0), num_tasks_completed(0), destroy_threads(false) {
+
+    for (int i = 0; i < num_threads; i++) {
+        threads.push_back(std::thread([this]() {
+            while (true) {
+                IRunnable* runnable = nullptr;
+                int task_id = -1;
+                {
+                    std::unique_lock<std::mutex> lock(mutex);
+                    cv.wait(lock, [this]() { return runnables.size() > 0 || destroy_threads; });
+                    if (destroy_threads) {
+                        break;
+                    }
+                    runnable = runnables.front();
+                    runnables.pop_front();
+                    task_id = task_id_counter++;
+                    cv.notify_all();
+                }
+                runnable->runTask(task_id, num_total_tasks);
+                num_tasks_completed++;
+                cv.notify_all();
+            }
+        }));
+    }
 }
 
-TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {}
+TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
+    // std::unique_lock<std::mutex> lock(mutex);
+    // destroy_threads = true;
+    // cv.notify_all();
+    // lock.unlock();
+    // for (auto& thread : threads) {
+    //     thread.join();
+    // }
+}
 
 void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
 
-
-    //
-    // TODO: CS149 students will modify the implementation of this
-    // method in Part A.  The implementation provided below runs all
-    // tasks sequentially on the calling thread.
-    //
+    std::unique_lock<std::mutex> lock(mutex);
 
     for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
+        runnables.push_back(runnable);
+    }
+
+    this->num_total_tasks = num_total_tasks;
+    this->num_tasks_completed = 0;
+    this->task_id_counter = 0;
+    lock.unlock();
+    cv.notify_all();
+
+    while (num_tasks_completed < num_total_tasks) {
+        // printf("Tasks completed: %d\n", this->num_tasks_completed.load());
+        std::this_thread::yield();
     }
 }
 
