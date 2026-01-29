@@ -1,7 +1,49 @@
 #include "tasksys.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdarg>
+#include <cstdio>
+#include <ctime>
+#include <functional>
+#include <iomanip>
+#include <sstream>
 #include <thread>
+
+void log(const char* func_name, const char* format, ...) {
+    // Get current time
+    auto now = std::chrono::system_clock::now();
+    auto time_val = std::chrono::system_clock::to_time_t(now);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()) % 1000;
+    
+    std::tm tm_buf;
+    localtime_r(&time_val, &tm_buf);
+    char timestamp[32];
+    std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &tm_buf);
+    
+    va_list args;
+    va_start(args, format);
+    size_t thread_hash = std::hash<std::thread::id>()(std::this_thread::get_id());
+    
+    // Format the variable arguments into a buffer
+    char message[1024];
+    vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+    
+    // Single printf for everything
+    printf("%s.%03lldL [%lx]: %s %s\n", 
+        timestamp, static_cast<long long>(ms.count()),
+        thread_hash,
+        func_name,
+        message);
+}
+
+#ifdef LOG_ENABLED
+#define LOG(...) log(__func__, __VA_ARGS__)
+#else
+#define LOG(...)
+#endif
 
 IRunnable::~IRunnable() {}
 
@@ -106,56 +148,51 @@ const char* TaskSystemParallelThreadPoolSpinning::name() {
 TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int num_threads):ITaskSystem(num_threads), 
  num_total_tasks(0), task_id_counter(0), num_tasks_completed(0), destroy_threads(false) {
 
+        
     for (int i = 0; i < num_threads; i++) {
         threads.push_back(std::thread([this]() {
             while (true) {
                 IRunnable* runnable = nullptr;
                 int task_id = -1;
                 {
-                    std::unique_lock<std::mutex> lock(mutex);
-                    cv.wait(lock, [this]() { return runnables.size() > 0 || destroy_threads; });
+                    std::lock_guard<std::mutex> lock(mutex);
                     if (destroy_threads) {
                         break;
+                    }
+                    if (runnables.size() == 0) {
+                        continue;
                     }
                     runnable = runnables.front();
                     runnables.pop_front();
                     task_id = task_id_counter++;
-                    cv.notify_all();
                 }
                 runnable->runTask(task_id, num_total_tasks);
                 num_tasks_completed++;
-                cv.notify_all();
             }
         }));
     }
 }
 
 TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
-    // std::unique_lock<std::mutex> lock(mutex);
-    // destroy_threads = true;
-    // cv.notify_all();
-    // lock.unlock();
-    // for (auto& thread : threads) {
-    //     thread.join();
-    // }
+    destroy_threads = true;
+    for (auto& thread : threads) {
+        thread.join();
+    }
 }
 
 void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
 
-    std::unique_lock<std::mutex> lock(mutex);
-
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnables.push_back(runnable);
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        for (int i = 0; i < num_total_tasks; i++) {
+            runnables.push_back(runnable);
+        }
+        this->num_total_tasks = num_total_tasks;
+        this->num_tasks_completed = 0;
+        this->task_id_counter = 0;
     }
 
-    this->num_total_tasks = num_total_tasks;
-    this->num_tasks_completed = 0;
-    this->task_id_counter = 0;
-    lock.unlock();
-    cv.notify_all();
-
     while (num_tasks_completed < num_total_tasks) {
-        // printf("Tasks completed: %d\n", this->num_tasks_completed.load());
         std::this_thread::yield();
     }
 }
@@ -181,36 +218,76 @@ const char* TaskSystemParallelThreadPoolSleeping::name() {
     return "Parallel + Thread Pool + Sleep";
 }
 
-TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): ITaskSystem(num_threads) {
-    //
-    // TODO: CS149 student implementations may decide to perform setup
-    // operations (such as thread pool construction) here.
-    // Implementations are free to add new class member variables
-    // (requiring changes to tasksys.h).
-    //
+TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): 
+ITaskSystem(num_threads), num_run_batch(0), num_tasks_completed(0), destroy_threads(false) {
+
+   LOG("Creating thread pool with %d threads", num_threads);
+   for (int i = 0; i < num_threads; i++) {
+       threads.push_back(std::thread([this]() {
+            LOG("Thread started");          
+            while (true) {
+                std::unique_lock<std::mutex> lock(mutex);
+                cv_tasks.wait(lock, [this]() { return !tasks.empty() || destroy_threads; });
+                if (destroy_threads) {
+                    LOG("Thread destroying threads");
+                    break;
+                }
+                Task task = tasks.front();
+                tasks.pop_front();
+                lock.unlock();
+
+                LOG("Thread running batch:task %d:%d", task.run_batch_id, task.task_id);
+                task.runnable->runTask(task.task_id, task.num_total_tasks);
+                // LOG("Thread finished batch:task %d:%d", task.run_batch_id, task.task_id);
+
+                lock.lock();
+                num_tasks_completed++;
+                // LOG("Thread incrementing num_tasks_completed to %d", num_tasks_completed.load());
+                cv_tasks_completed.notify_one();
+            }
+            LOG("Thread finished"); 
+        }));
+   }
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
-    //
-    // TODO: CS149 student implementations may decide to perform cleanup
-    // operations (such as thread pool shutdown construction) here.
-    // Implementations are free to add new class member variables
-    // (requiring changes to tasksys.h).
-    //
+    std::unique_lock<std::mutex> lock(mutex);
+    LOG("Destroying thread pool");
+    destroy_threads = true;
+    lock.unlock();
+    cv_tasks.notify_all();
+    LOG("Notified all threads to destroy");
+    for (auto& thread : threads) {
+        LOG("Joining thread");
+        thread.join();
+        LOG("Thread joined");
+    }
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
 
+    int batch_id = num_run_batch++;
+    LOG("Running %d tasks for batch %d", num_total_tasks, batch_id);
 
-    //
-    // TODO: CS149 students will modify the implementation of this
-    // method in Parts A and B.  The implementation provided below runs all
-    // tasks sequentially on the calling thread.
-    //
+
+    std::unique_lock<std::mutex> lock(mutex);
 
     for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
+        LOG("Adding batch:task %d:%d to runnables", batch_id, i);
+        Task task = {runnable, batch_id, i, num_total_tasks};
+        tasks.push_back(task);
     }
+    this->num_tasks_completed = 0;
+    lock.unlock();
+    cv_tasks.notify_all();
+    LOG("Notified all threads to run tasks for batch %d", batch_id);
+
+    std::unique_lock<std::mutex> lock2(mutex);
+    LOG("Waiting for tasks for batch %d to complete ", batch_id);
+    cv_tasks_completed.wait(lock2, [this, num_total_tasks]() {
+        //// LOG("Checking if tasks for batch %d are complete: %d out of %d", batch_id, num_tasks_completed, num_total_tasks);
+        return num_tasks_completed == num_total_tasks; });
+    LOG("Tasks completed");
 }
 
 TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,

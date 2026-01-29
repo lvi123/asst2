@@ -54,14 +54,21 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
                                 const std::vector<TaskID>& deps);
         void sync();
     private:
-        std::mutex mutex;
-        std::condition_variable cv;
         std::vector<std::thread> threads;
+
+        std::mutex mutex;
         std::deque<IRunnable*> runnables;
         int num_total_tasks;
         int task_id_counter;
         std::atomic<int> num_tasks_completed;
         std::atomic<bool> destroy_threads;
+};
+
+struct Task {
+    IRunnable* runnable;
+    int run_batch_id;
+    int task_id;
+    int num_total_tasks;
 };
 
 /*
@@ -79,6 +86,17 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+
+    private:
+        std::vector<std::thread> threads;
+
+        std::mutex mutex;
+        std::condition_variable cv_tasks;
+        std::condition_variable cv_tasks_completed;
+        std::deque<Task> tasks;
+        int num_run_batch;
+        int num_tasks_completed;
+        bool destroy_threads;
 };
 
 #endif
