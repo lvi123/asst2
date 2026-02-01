@@ -3,6 +3,14 @@
 
 #include "itasksys.h"
 
+#include <thread>
+#include <deque>
+#include <unordered_map>
+#include <unordered_set>
+#include <condition_variable>
+#include <mutex>
+#include <atomic>
+
 /*
  * TaskSystemSerial: This class is the student's implementation of a
  * serial task execution engine.  See definition of ITaskSystem in
@@ -68,6 +76,51 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+
+    private:
+        struct TaskBatch {
+            TaskID tbatch_id;
+            IRunnable* runnable;
+            int num_total_tasks;
+            int num_tasks_completed;
+            std::vector<TaskID> deps;
+        };
+        
+        struct Task {
+            int task_id;
+            IRunnable* runnable;
+            int num_total_tasks;
+            TaskID tbatch_id;
+        };
+
+        void runTaskBatchLocked(const TaskBatch& tbatch);
+
+        std::vector<std::thread> threads;
+
+        std::mutex mutex;
+
+        // counter for task batch ids
+        TaskID tbatch_id_counter;
+        // map of task batches which are waiting for dependencies to complete
+        std::unordered_map<TaskID, TaskBatch> tbatch_waiting_for_deps;
+        // map of task batches which are running
+        std::unordered_map<TaskID, TaskBatch> tbatch_running;
+        // map of task batches which are completed
+        std::unordered_set<TaskID> completed_tbatches;
+        // flag to indicate when one or more running task batches are completed
+        bool some_tbatch_completed;
+        // condition variable to notify when a running task batch is completed
+        std::condition_variable cv_tbatch_completed;
+
+        // queue of running tasks
+        std::deque<Task> tasks;
+        // condition variable to notify when a running task is added
+        std::condition_variable cv_tasks;
+
+        // flag to indicate when threads should be destroyed
+        std::atomic<bool> destroy_threads;
+
+
 };
 
 #endif

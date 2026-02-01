@@ -6,8 +6,8 @@ else
     CXX = g++ -m64
 endif
 
-CXXFLAGS=-I. -I../common -I../tests -Iobjs/ -O3 -std=c++11 -Wall 
-#-DLOG_ENABLED
+CXXFLAGS=-I. -I../common -I../tests -Iobjs/ -O3 -std=c++11 -Wall
+# CXXFLAGS+=-DLOG_ENABLED
 
 APP_NAME=runtasks
 OBJDIR=objs

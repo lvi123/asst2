@@ -51,6 +51,7 @@
         "vector": "cpp",
         "algorithm": "cpp",
         "deque": "cpp",
-        "iomanip": "cpp"
+        "iomanip": "cpp",
+        "unordered_set": "cpp"
     }
 }
